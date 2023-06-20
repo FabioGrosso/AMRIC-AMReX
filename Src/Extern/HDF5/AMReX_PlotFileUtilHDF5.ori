@@ -7,7 +7,7 @@
 #ifdef AMREX_USE_EB
 #include <AMReX_EBFabFactory.H>
 #endif
-#include <cmath>
+
 #include "hdf5.h"
 
 #ifdef AMREX_USE_HDF5_ZFP
@@ -25,18 +25,6 @@
 
 #include <fstream>
 #include <iomanip>
-#include <iostream>
-#include <numeric>
-
-#define BSIZE 8
-
-int gcd(int a, int b) {
-    if (b == 0) {
-        return a;
-    } else {
-        return gcd(b, a % b);
-    }
-}
 
 namespace amrex {
 
@@ -158,7 +146,6 @@ static void SetHDF5fapl(hid_t fapl)
 #endif
 
 }
-
 
 static void
 WriteGenericPlotfileHeaderHDF5 (hid_t fid,
@@ -389,7 +376,7 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
     std::string filename(plotfilename + ".h5");
 
     // Write out root level metadata
-    hid_t fapl, dxpl_col, dxpl_ind, dcpl_id, fid, grp, dcpl_id_lev;
+    hid_t fapl, dxpl_col, dxpl_ind, dcpl_id, fid, grp;
 
     if(ParallelDescriptor::IOProcessor()) {
         BL_PROFILE_VAR("H5writeMetadata", h5dwm);
@@ -463,7 +450,7 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
     const char *chunk_env = NULL;
     std::string mode_env, value_env;
     double comp_value = -1.0;
-    hsize_t chunk_dim[1] = {98304};
+    hsize_t chunk_dim[1] = {1024};
 
     chunk_env = getenv("HDF5_CHUNK_SIZE");
     if (chunk_env != NULL)
@@ -543,6 +530,8 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
     // Write data for each level
     char level_name[32];
     for (int level = 0; level <= finest_level; ++level) {
+        hid_t  dcpl_id_lev;
+        dcpl_id_lev = H5Pcopy(dcpl_id);
         sprintf(level_name, "level_%d", level);
 #ifdef AMREX_USE_HDF5_ASYNC
         grp = H5Gopen_async(fid, level_name, H5P_DEFAULT, es_id_g);
@@ -582,12 +571,9 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
             Vector<Box> &boxesAtProc = gridMap[gridProc];
             boxesAtProc.push_back(grids[i]);
         }
-
         BoxArray sortedGrids(grids.size());
         Vector<int> sortedProcs(grids.size());
         int bIndex(0);
-        Vector<int> boxOffsets(nProcs, 0);
-        unsigned int boxTotalOffset(0);
         for(auto it = gridMap.begin(); it != gridMap.end(); ++it) {
             int proc = it->first;
             Vector<Box> &boxesAtProc = it->second;
@@ -596,44 +582,20 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
                 sortedProcs[bIndex] = proc;
                 ++bIndex;
             }
-            boxOffsets[proc] = boxTotalOffset;
-            boxTotalOffset += boxesAtProc.size();
         }
 
-        Vector<int> newMap(grids.size());
-        for(int i(0); i < grids.size(); ++i) {
-            newMap[boxOffsets[procMap[i]]] = i;
-            boxOffsets[procMap[i]]++;
-        }
+        // //dcdc-output procMap & sortedProcs
+        // if(ParallelDescriptor::IOProcessor()) {
+        //     std::cout << "procMap: ";
+        //     for (auto i = procMap.begin(); i != procMap.end(); ++i)
+        //         std::cout << *i << " ";
+        //     std::cout << std::endl;
 
-        // dcdc-output procMap & sortedProcs
-        // if (level == finest_level) {
-            if(ParallelDescriptor::IOProcessor()) {
-                std::cout << "procMap: ";
-                for (auto i = procMap.begin(); i != procMap.end(); ++i)
-                    std::cout << *i << " ";
-                std::cout << std::endl;
-
-                std::cout << "sortedProcs: ";
-                for (auto i = sortedProcs.begin(); i != sortedProcs.end(); ++i)
-                    std::cout << *i << " ";
-                std::cout << std::endl;
-
-                // //dcdc-output boxOffsets
-                // std::cout << "boxOffsets: ";
-                // for (auto i = boxOffsets.begin(); i != boxOffsets.end(); ++i)
-                //     std::cout << *i << " ";
-                // std::cout << std::endl;
-
-                // //dcdc-output newMap
-                // std::cout << "newMap: ";
-                // for (auto i = newMap.begin(); i != newMap.end(); ++i)
-                //     std::cout << *i << " ";
-                // std::cout << std::endl;
-
-            }
+        //     std::cout << "sortedProcs: ";
+        //     for (auto i = sortedProcs.begin(); i != sortedProcs.end(); ++i)
+        //         std::cout << *i << " ";
+        //     std::cout << std::endl;
         // }
-
 
 
         hsize_t  oflatdims[1];
@@ -664,6 +626,7 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
         }
         offsets[sortedGrids.size()] = currentOffset;
 
+
         Vector<unsigned long long> procOffsets(nProcs, 0);
         Vector<unsigned long long> procBufferSize(nProcs, 0);
         Vector<unsigned long long> realProcBufferSize(nProcs, 0);
@@ -671,75 +634,67 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
         for(auto it = gridMap.begin(); it != gridMap.end(); ++it) {
             int proc = it->first;
             Vector<Box> &boxesAtProc = it->second;
-            realProcBufferSize[proc] = 0L;
+            procOffsets[proc] = totalOffset;
+            procBufferSize[proc] = 0L;
+
             for(int b(0); b < boxesAtProc.size(); ++b) {
-                realProcBufferSize[proc] += boxesAtProc[b].numPts();
+                procBufferSize[proc] += boxesAtProc[b].numPts() * ncomp;
             }
+
+
+            totalOffset += procBufferSize[proc];
             /* if (level == 2) { */
             /*     fprintf(stderr, "Rank %d: level %d, proc %d, offset %ld, size %ld, all size %ld\n", */
             /*             myProc, level, proc, procOffsets[proc], procBufferSize[proc], totalOffset); */
             /* } */
         }
 
-        //dcdc find maxBuf
-        unsigned long long maxBuf = *max_element(realProcBufferSize.begin(), realProcBufferSize.end());
-        if(ParallelDescriptor::IOProcessor())
-            std::cout << "maxBuf: " << maxBuf << std::endl;
-        H5Pset_chunk(dcpl_id, 1, &maxBuf);
-
-        //dcdc fill
-        // for(auto it = gridMap.begin(); it != gridMap.end(); ++it) {
-        //     int proc = it->first;
-        //     procOffsets[proc] = totalOffset;
-        //     procBufferSize[proc] = 0L;
-        //     procBufferSize[proc] += maxBuf*ncomp;
-        //     totalOffset += procBufferSize[proc];
-        // }
-
-        int nRealProc(0);
-        for(int i=0; i<nProcs; ++i) {
-            if (realProcBufferSize[i] > 0){
-                procOffsets[i] = totalOffset;
-                procBufferSize[i] = 0L;
-                procBufferSize[i] = maxBuf*ncomp;
-                totalOffset += procBufferSize[i];
-                nRealProc++;
-            }
-        }
-
-
-        /*dcdc-output procOffsets*/
+        // //dcdc-output procOffsets
         if(ParallelDescriptor::IOProcessor()) {
             std::cout << "procOffsets: ";
             for (auto i = procOffsets.begin(); i != procOffsets.end(); ++i)
                 std::cout << *i << " ";
             std::cout << std::endl;
+
         }
 
+        //dcdc output procBufferSize
+        // if(ParallelDescriptor::IOProcessor()) {
+        //     for (int i(0); i < nProcs; ++i) {
+        //         std::cout << "buffer size on proc " << i << ": " << procBufferSize[i] << std::endl;
+        //     }
+        // }
 
-
-
-        /*dcdc output box*/
-        // unsigned long long totalBoxOffset(0);
-        // Vector<unsigned long long> myBoxOffsets(gridMap[myProc].size(), 0);
+        // //dcdc output box
         // std::cout << "box on proc " << myProc << std::endl;
         // for (int i(0); i < gridMap[myProc].size(); ++i) {
         //     for(int j(0); j < AMREX_SPACEDIM; ++j) {
         //         std::cout << gridMap[myProc][i].smallEnd(j) << " " << gridMap[myProc][i].bigEnd(j) << std::endl;
         //     }
-        //     std::cout << gridMap[myProc][i].numPts() << std::endl;
-        //     myBoxOffsets[i] = totalBoxOffset;
-        //     totalBoxOffset += gridMap[myProc][i].numPts();
         // }
-        // std::cout << "myBoxOffsets: ";
-        // for (auto i = myBoxOffsets.begin(); i != myBoxOffsets.end(); ++i)
-        //     std::cout << *i << " ";
-        // std::cout << std::endl;
 
-        // std::cout << "totalBoxOffset: " << totalBoxOffset << std::endl;
+        //dcdc find maxBuf
+        // unsigned long long maxBuf = *max_element(procBufferSize.begin(), procBufferSize.end());
+        // if(ParallelDescriptor::IOProcessor())
+        //     std::cout << "maxBuf: " << maxBuf << std::endl;
+        // H5Pset_chunk(dcpl_id, 1, &maxBuf);
 
+        // //dcdc try fill
+        // Vector<unsigned long long> fillProcOffsets(nProcs, 0);
+        // Vector<unsigned long long> fillProcBufferSize(nProcs, 0);
+        // unsigned long long totalOffset(0);
+        // for(auto it = gridMap.begin(); it != gridMap.end(); ++it) {
+        //     int proc = it->first;
+        //     Vector<Box> &boxesAtProc = it->second;
+        //     fillProcOffsets[proc] = totalOffset;
+        //     fillProcBufferSize[proc] = 0L;
 
-        //dcdc write metadata
+        //     //dcdc try filling
+        //     fillProcBufferSize[proc] += maxBuf;
+
+        //     totalOffset += fillProcBufferSize[proc];
+        // }
+
 
         if(ParallelDescriptor::IOProcessor()) {
             int vbCount(0);
@@ -782,287 +737,74 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
         ch_offset[0]       = procOffsets[myProc];          // ---- offset on this proc
         hs_procsize[0]     = procBufferSize[myProc];       // ---- size of buffer on this proc
         std::cout << " " << std::endl;
-        //std::cout << "size of old buffer on proc " << myProc << ": " << procBufferSize[myProc] << std::endl;
-        //std::cout << "size of buffer on proc " << myProc << ": " << realProcBufferSize[myProc] << std::endl;
-        // hs_allprocsize[0]  = offsets[sortedGrids.size()];  // ---- size of buffer on all procs
+        // std::cout << "size of buffer on proc " << myProc << ": " << realProcBufferSize[myProc] << std::endl;
+        std::cout << "size of buffer on proc " << myProc << ": " << procBufferSize[myProc] << std::endl;
+        hs_allprocsize[0]  = offsets[sortedGrids.size()];  // ---- size of buffer on all procs
         //dcdc change total buf size
-        hs_allprocsize[0]     = maxBuf *ncomp * nRealProc ;       // ---- size of buffer on all procs
+        // hs_allprocsize[0]     = maxBuf * nProcs ;       // ---- size of buffer on all procs
 
         hid_t dataspace    = H5Screate_simple(1, hs_allprocsize, NULL);
         hid_t memdataspace = H5Screate_simple(1, hs_procsize, NULL);
 
+        // hsize_t test_hs_procsize[3] = {32,32,32};
+        // hsize_t test_hs_allprocsize[3] = {64,64,64};
+        // hid_t dataspace    = H5Screate_simple(3, test_hs_procsize, NULL);
+        // hid_t memdataspace = H5Screate_simple(3, test_hs_allprocsize, NULL);
 
         /* fprintf(stderr, "Rank %d: level %d, offset %ld, size %ld, all size %ld\n", myProc, level, ch_offset[0], hs_procsize[0], hs_allprocsize[0]); */
 
-        if (realProcBufferSize[myProc] == 0)
+        if (hs_procsize[0] == 0)
             H5Sselect_none(dataspace);
         else
             H5Sselect_hyperslab(dataspace, H5S_SELECT_SET, ch_offset, NULL, hs_procsize, NULL);
 
-
-        BL_PROFILE_VAR("H5DwriteData", h5dwg);
-
-
-        //dcdc-start
         auto preFileTime0 = amrex::second();
-        MultiFab *tempmf = const_cast<MultiFab*>(mf[level]);
-        Real bogus_flag=-1e200;
-        if (level < finest_level)
-        {
-            MultiFab *highMf = const_cast<MultiFab*>(mf[level+1]);
-            const BoxArray baf = BoxArray((*highMf).boxArray()).coarsen(ref_ratio[level]);
-            for (MFIter mfi(*tempmf); mfi.isValid(); ++mfi)
-            {
-                FArrayBox& myFab = (*tempmf)[mfi];
-                    std::vector< std::pair<int,Box> > isects = baf.intersections((*tempmf).boxArray()[mfi.index()]);
-
-
-                for (int ii = 0; ii < isects.size(); ii++){
-                    myFab.setVal(bogus_flag,isects[ii].second,0,ncomp);
-                }
-            }
-        }
-
-
-        int bbb=16;
-        std::ifstream bFile("bbb.txt");
-        if (bFile.is_open()) {
-            bFile >> bbb;
-            bFile.close();
+        Vector<Real> a_buffer(procBufferSize[myProc], -1.0);
+        const MultiFab* data;
+        std::unique_ptr<MultiFab> mf_tmp;
+        if (mf[level]->nGrowVect() != 0) {
+            mf_tmp = std::make_unique<MultiFab>(mf[level]->boxArray(),
+                                                mf[level]->DistributionMap(),
+                                                mf[level]->nComp(), 0, MFInfo(),
+                                                mf[level]->Factory());
+            MultiFab::Copy(*mf_tmp, *mf[level], 0, 0, mf[level]->nComp(), 0);
+            data = mf_tmp.get();
         } else {
-            std::cerr << "Unable to open the bbb file." << std::endl;
+            data = mf[level];
         }
-        int bSize =  bbb*std::pow(2,(double)level);
 
-        //std::cout << "bSize: " << bSize << std::endl;
-
-        Vector<Real> b_buffer(procBufferSize[myProc], 0);
-        long long cnt = 0;
-        long long tempCnt = 0;
-        size_t bigX=1;
-
-        // /*stack*/
-         size_t unitBlkSize = bSize*bSize*bSize;
-         if (realProcBufferSize[myProc]>0){
-         bigX = cbrt(realProcBufferSize[myProc]/(unitBlkSize));
-         //std::cout<< "init bigX: " << bigX << std::endl;
-             size_t testBigZ = ((realProcBufferSize[myProc]/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
-             //std::cout<< "testBigZ: " << testBigZ << std::endl;
-
-             while (testBigZ*bigX*bigX*unitBlkSize>(procBufferSize[myProc]/ncomp)){
-                 bigX -= 1;
-                 //std::cout << "protential bug, decreasing bigX to: " << bigX << std::endl;
-                 testBigZ = ((realProcBufferSize[myProc]/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
-             }
-         }
-         std::cout<< "final bigX: " << bigX << std::endl;
-         size_t b2Size = bSize*bSize;
-         size_t big2X = bigX*bigX;
-
-
-        for (int pp = 0; pp < ncomp; pp++) {
-            for (MFIter mfi(*tempmf); mfi.isValid(); ++mfi)
-            {
-                Array4<Real> const& fab_array = (*tempmf).array(mfi);
-                int ncomp = (*tempmf).nComp();
-                const Box& box = mfi.validbox();
-
-                const Dim3 lo = amrex::lbound(box);
-                const Dim3 hi = amrex::ubound(box);
-
-                //check mod
-                if (level == finest_level) {
-                    // std::cout << lo.x << " " << lo.y << " " << lo.z << std::endl;
-                    if (lo.x%bSize!=0 || lo.y%bSize!=0 || lo.z%bSize!=0) {
-                        std::cout << "wtwtwtwtwtwtwtwtwtwtwt" << std::endl;
-                    }
-                }
-
-                /*stack*/
-                 size_t cc=0;
-                 size_t xx, yy, zz, bb, ii, jj, kk;
-                 for (int z = 0; z < (hi.z-lo.z+1)/bSize; ++z){
-                     for (int y = 0; y < (hi.y-lo.y+1)/bSize; ++y){
-                         for (int x = 0; x < (hi.x-lo.x+1)/bSize; ++x){
-                             // todo bb = 0
-                             for (int k = lo.z+z*bSize; k < lo.z+z*bSize+bSize; ++k){
-                                 for (int j =lo.y+y*bSize; j <lo.y+y*bSize+bSize; ++j){
-                                     for (int i = lo.x+x*bSize; i <lo.x+x*bSize+bSize; ++i){
-                                         if(fab_array(i,j,k,0) != bogus_flag) {
-                                             cc = tempCnt/(unitBlkSize);
-                                             zz = cc/big2X;
-                                             yy = (cc - zz*big2X)/bigX;
-                                             xx = cc -zz*big2X - yy*bigX;
-
-                                             bb = tempCnt - unitBlkSize*cc;
-
-                                             kk = bb/b2Size;
-                                             jj = (bb - kk*b2Size)/bSize;
-                                             ii = bb - kk*b2Size - jj*bSize;
-                                             // if (b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] != 0)
-                                             //     std::cout << b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] <<std::endl;
-                                             b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size+ pp*maxBuf] = fab_array(i,j,k,0);
-
-                                             tempCnt++;
-                                         }
-                                     }
-                                 }
-                             }
-                         }
-                     }
-                 }
-
-                // /*nast*/
-                    /*for (int z = 0; z < (hi.z-lo.z+1)/bSize; ++z)
-                        for (int y = 0; y < (hi.y-lo.y+1)/bSize; ++y)
-                            for (int x = 0; x < (hi.x-lo.x+1)/bSize; ++x)
-                                for (int k = lo.z+z*bSize; k < lo.z+z*bSize+bSize; ++k)
-                                    for (int j =lo.y+y*bSize; j <lo.y+y*bSize+bSize; ++j)
-                                        for (int i = lo.x+x*bSize; i <lo.x+x*bSize+bSize; ++i){
-                                            if(fab_array(i,j,k,0) != bogus_flag) {
-                                                b_buffer[tempCnt + pp*maxBuf] = fab_array(i,j,k,pp);
-                                                tempCnt++;
-                                            }
-                                            // // bs
-                                            // else {
-                                            //     b_buffer[cnt] = 0;
-                                            //     cnt++;
-                                            // }
-                                        } */
-
-                /*1d*/
-                // for (int z = lo.z; z <= hi.z; ++z)
-                //     for (int y = lo.y; y <= hi.y; ++y)
-                //         for (int x = lo.x; x <= hi.x; ++x) {
-                //             if(fab_array(x,y,z,0) != bogus_flag) {
-                //                 b_buffer[cnt] = fab_array(x,y,z,0);
-                //                 cnt++;
-                //             }
-                //             /*bs*/
-                //             else {
-                //                 cnt++;
-                //             }
-                //         }
-
-            }
-            cnt+=tempCnt;
-            // std::cout << "tempCnt: " << tempCnt << std::endl;
-            tempCnt=0;
+        Long writeDataItems(0), writeDataSize(0);
+        for(MFIter mfi(*data); mfi.isValid(); ++mfi) {
+            const FArrayBox &fab = (*data)[mfi];
+            writeDataItems = fab.box().numPts() * (*data).nComp();
+            // std::cout << "fab.box().numPts(): " << fab.box().numPts() << std::endl;
+            // if(doConvert) {
+            //     RealDescriptor::convertFromNativeFormat(static_cast<void *> (a_buffer.dataPtr()+writeDataSize),
+            //                                             writeDataItems, fab.dataPtr(), *whichRD);
+            // } else {    // ---- copy from the fab
+                memcpy(static_cast<void *> (a_buffer.dataPtr()+writeDataSize),
+                       fab.dataPtr(), writeDataItems * sizeof(double));
+            // }
+            writeDataSize += writeDataItems;
+            // std::cout << "fab.dataPtr()[0]: " << fab.dataPtr()[0] << std::endl;
         }
-        if(ParallelDescriptor::IOProcessor()) {
-            std::cout << "amrex using stack" << std::endl;
-        }
+        // std::cout << "a_buffer[0]: " << a_buffer[0] << std::endl;
+        // std::cout << "writeDataSize on proc " << myProc << ": " << writeDataSize << std::endl;
+
         auto  preFileTime = amrex::second() - preFileTime0;
         const int IOProc2        = ParallelDescriptor::IOProcessorNumber();
         ParallelDescriptor::ReduceRealMax(preFileTime,IOProc2);
         amrex::Print() << "pre time = " << preFileTime << "  seconds" << "\n\n";
 
+        /*out a_buffer to .bin*/
+        // if (myProc == 0)
+        // {
+        //     std::ofstream fout("aa.bin", std::ios::binary);
+        //     fout.write((char*)&a_buffer[0], procBufferSize[myProc] * sizeof(double));
+        //     fout.close();
+        // }
 
-        /*out b_buffer to .bin*/
-        // char b_name[64];
-        // sprintf(b_name, "test/0_%d_%d.bin", level,myProc);
-        // std::ofstream fout(b_name, std::ios::binary);
-        // fout.write((char*)&b_buffer[0], cnt * sizeof(double));
-        // fout.close();
-
-        char meta_name[64];
-        cnt = cnt/ncomp;
-        //std::cout<< "cnt in buffer " << myProc << " : " << cnt << std::endl;
-
-        /*stack*/
-         size_t bigZ = ((cnt/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
-         //std::cout << "bigZ: " << bigZ << std::endl;
-         cnt = bigZ*bigX*bigX*unitBlkSize;
-         //std::cout << "fill cnt in proc: " << myProc << " : "<< cnt << std::endl;
-         sprintf(meta_name, "meta/s_%d_%d.txt", level, myProc);
-         std::ofstream sfile(meta_name);
-         if (!sfile.is_open()) {
-             std::cout << "Error opening metadata file\n";
-             return;
-         }
-         sfile << bigX;
-         sfile.close();
-        /*stack*/
-
-        if(ParallelDescriptor::IOProcessor()) {
-            sprintf(meta_name, "meta/sp_%d.txt", level);
-            std::ofstream spfile(meta_name);
-            if (!spfile.is_open()) {
-                std::cout << "Error opening metadata file\n";
-                return;
-            }
-            for (auto i = sortedProcs.begin(); i != sortedProcs.end(); ++i)
-                spfile << *i << " ";
-            spfile.close();
-
-            sprintf(meta_name, "meta/realp_%d.txt", level);
-            std::ofstream rpfile(meta_name);
-            if (!rpfile.is_open()) {
-                std::cout << "Error opening metadata file\n";
-                return;
-            }
-            rpfile  << nRealProc;
-            rpfile.close();
-        }
-
-        unsigned long long checkFake = realProcBufferSize[myProc];
-        realProcBufferSize[myProc] = cnt;
-
-        if (level == finest_level) {
-            char meta_name[128];
-            sprintf(meta_name, "meta/meta_%d_%d.txt", level, myProc);
-            std::ofstream outfile(meta_name);
-            if (!outfile.is_open()) {
-                std::cout << "Error opening metadata file\n";
-                return;
-            }
-            outfile <<  realProcBufferSize[myProc];
-            outfile.close();
-            if(ParallelDescriptor::IOProcessor()) {
-
-                sprintf(meta_name, "meta/f.txt", level);
-                std::ofstream ffile(meta_name);
-                if (!ffile.is_open()) {
-                    std::cout << "Error opening metadata file\n";
-                    return;
-                }
-                ffile << level;
-                ffile.close();
-
-                sprintf(meta_name, "meta/ncomp.txt", level);
-                std::ofstream nfile(meta_name);
-                if (!nfile.is_open()) {
-                    std::cout << "Error opening metadata file\n";
-                    return;
-                }
-                nfile << ncomp;
-                nfile.close();
-
-                sprintf(meta_name, "meta/p.txt", level);
-                std::ofstream pfile(meta_name);
-                if (!pfile.is_open()) {
-                    std::cout << "Error opening metadata file\n";
-                    return;
-                }
-                pfile << nProcs;
-                pfile.close();
-
-            }
-        } else {
-            char meta_name[128];
-            sprintf(meta_name, "meta/meta_%d_%d.txt", level, myProc);
-            std::ofstream outfile(meta_name);
-            if (!outfile.is_open()) {
-                std::cout << "Error opening metadata file\n";
-                return;
-            }
-            if (checkFake != 0) {
-                outfile <<  realProcBufferSize[myProc];
-            } else {
-                outfile << -1;
-            }
-            outfile.close();
-        }
+        BL_PROFILE_VAR("H5DwriteData", h5dwg);
 
         double eb = 0.001;
         std::ifstream inputFile("eb.txt");
@@ -1078,8 +820,7 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
             size_t cd_nelmts;
             unsigned int* cd_values = NULL;
             unsigned filter_config;
-            SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 1, bigX*bSize, eb, level, realProcBufferSize[myProc]);
-            dcpl_id_lev = H5Pcopy(dcpl_id);
+            SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 1, 10000, eb, 0, 1024);
             H5Pset_filter(dcpl_id_lev, H5Z_FILTER_SZ, H5Z_FLAG_MANDATORY, cd_nelmts, cd_values);
         }
 #endif
@@ -1089,8 +830,7 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
             size_t cd_nelmts;
             unsigned int* cd_values = NULL;
             unsigned filter_config;
-            SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 1, bigX*bSize, eb, level, realProcBufferSize[myProc]);
-            dcpl_id_lev = H5Pcopy(dcpl_id);
+            SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 1, 1000, eb, 0, 1024);
             H5Pset_filter(dcpl_id_lev, H5Z_FILTER_SZ3, H5Z_FLAG_MANDATORY, cd_nelmts, cd_values);
         }
 #endif
@@ -1104,12 +844,14 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
             std::cout << ParallelDescriptor::MyProc() << "create data failed!  ret = " << dataset << std::endl;
 
         auto dPlotFileTime0 = amrex::second();
+
 #ifdef AMREX_USE_HDF5_ASYNC
-        ret = H5Dwrite_async(dataset, H5T_NATIVE_DOUBLE, memdataspace, dataspace, dxpl_col, b_buffer.dataPtr(), es_id_g);
+        ret = H5Dwrite_async(dataset, H5T_NATIVE_DOUBLE, memdataspace, dataspace, dxpl_col, a_buffer.dataPtr(), es_id_g);
 #else
-        ret = H5Dwrite(dataset, H5T_NATIVE_DOUBLE, memdataspace, dataspace, dxpl_col, b_buffer.dataPtr());
+        ret = H5Dwrite(dataset, H5T_NATIVE_DOUBLE, memdataspace, dataspace, dxpl_col, a_buffer.dataPtr());
 #endif
         if(ret < 0) { std::cout << ParallelDescriptor::MyProc() << "Write data failed!  ret = " << ret << std::endl; break; }
+
         auto  dPlotFileTime = amrex::second() - dPlotFileTime0;
         const int IOProc        = ParallelDescriptor::IOProcessorNumber();
         ParallelDescriptor::ReduceRealMax(dPlotFileTime,IOProc);
@@ -1153,6 +895,96 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
     H5Fclose(fid);
 #endif
 
+// //dcdc-start
+//     for (int lev=finest_level; lev>=0; --lev)
+//     {
+//         MultiFab tempmf(mf[lev]->boxArray(),mf[lev]->DistributionMap(),mf[lev]->nComp(),0);
+//         Real bogus_flag=-1e200;
+//         if (lev < finest_level)
+//         {
+//             const BoxArray baf = BoxArray(tempmf.boxArray()).coarsen(ref_ratio[lev]);
+//             for (MFIter mfi(tempmf); mfi.isValid(); ++mfi)
+//             {
+//                 FArrayBox& myFab = tempmf[mfi];
+//                     std::vector< std::pair<int,Box> > isects = baf.intersections(tempmf.boxArray()[mfi.index()]);
+
+//                 for (int ii = 0; ii < isects.size(); ii++)
+//                     myFab.setVal(bogus_flag,isects[ii].second,0,ncomp);
+//             }
+//         }
+
+//         long int idx=0;
+//         // std::cout<<"Probhi: "<<geom[lev].ProbHi(0) <<  " " << geom[lev].ProbHi(1) << " " << geom[lev].ProbHi(2) <<std::endl;
+//         double max[3] = { -FLT_MAX,-FLT_MAX,-FLT_MAX};
+//         double min[3] = { FLT_MAX,FLT_MAX,FLT_MAX};
+//         for (MFIter mfi(tempmf); mfi.isValid(); ++mfi)
+//         {
+//             const FArrayBox& fab = tempmf[mfi];
+//              Array4<Real> const& fab_array = tempmf.array(mfi);
+//              int ncomp = tempmf.nComp();
+//             const Box& box = mfi.validbox();
+//              FArrayBox fab2;
+//              fab2.resize(box,ncomp);
+
+//             const Dim3 lo = amrex::lbound(box);
+//             const Dim3 hi = amrex::ubound(box);
+
+//             const auto dx = geom[lev].CellSize();
+//             RealVect boxSizeH(geom[lev].ProbHi());
+//             // if(verbose)
+//             // {
+//                 // std::cout<<"level"<<lev<<"dx: "<<dx[0]<<"dy: "<<dx[1]<<dx[2]<<std::endl;
+//                 // std::cout<<"Probhi"<<boxSizeH<<std::endl;
+//             // }
+
+//          const auto len = amrex::length(box);  // length of box
+
+//          for (int z = lo.z; z <= hi.z; ++z) {
+//              for (int y = lo.y; y <= hi.y; ++y) {
+//                      for (int x = lo.x; x <= hi.x; ++x) {
+
+//                 //idx assumes ncomp=1, is local to this fab
+//                 //                         int idx = x+y*len.x+z*len.x*len.y-(lo.x+lo.y*len.x+lo.z*len.x*len.y);
+//                     if(fab_array(x,y,z,0) != bogus_flag) {
+
+//                         Real tmpx=x*dx[0];
+//                         Real tmpy=y*dx[1];
+//                         Real tmpz=z*dx[2];
+//                         Real tmpvol=dx[2]*dx[0]*dx[1];
+
+//                         if (x > max[0])
+//                                      max[0] = x;
+//                         if (y > max[1])
+//                                      max[1] = y;
+//                         if (z > max[2])
+//                                      max[2] = z;
+//                         if (x < min[0])
+//                                      min[0] = x;
+//                         if (y < min[1])
+//                                      min[1] = y;
+//                         if (z < min[2])
+//                                      min[2] = z;
+
+
+//                         // for (int n = 0; n < comps.size(); ++n) {
+//                         //     ofs_mpi.write((char *) &(fab_array(x,y,z,comps[n])), sizeof(amrex::Real));
+//                         // }
+
+//                     }
+//                      }
+//              }
+//          }
+//         std::cout<< "box on proc " << myProc << std::endl;
+//         std::cout<< "low: " <<  lo.x<< " " << lo.y << " " << lo.z<< std::endl;
+//         std::cout<< "high: " <<  hi.x<< " " << hi.y << " " << hi.z<< std::endl;
+//         // std::cout<< "range: " <<  len.x<< " " << len.y << " " << len.z<< std::endl;
+//         }
+//         // std::cout<< "pro low: " <<  min[0]<< " " << min[1] << " " << min[2]<< std::endl;
+//         // std::cout<< "pro high: " <<  max[0]<< " " << max[1] << " " << max[2]<< std::endl;
+//         // std::cout<< "pro range: " <<  max[0]-min[0] << " " << max[1]-min[1] << " " << max[2]-min[2] << std::endl;
+//         // std::cout<< " " << std::endl;
+
+//     }
 
 } // WriteMultiLevelPlotfileHDF5SingleDset
 
@@ -1322,7 +1154,8 @@ void WriteMultiLevelPlotfileHDF5MultiDset (const std::string& plotfilename,
 #endif
 
         if (ParallelDescriptor::MyProc() == 0) {
-            std::cout << "\nHDF5 plotfile using " << mode_env << std::endl;
+            std::cout << "\nHDF5 checkpoint using " << mode_env << ", " <<
+                value_env << ", " << chunk_dim << std::endl;
         }
     }
 #endif
@@ -1428,40 +1261,24 @@ void WriteMultiLevelPlotfileHDF5MultiDset (const std::string& plotfilename,
 
         Vector<unsigned long long> procOffsets(nProcs);
         Vector<unsigned long long> procBufferSize(nProcs);
-        Vector<unsigned long long> realProcBufferSize(nProcs, 0);
-        for(auto it = gridMap.begin(); it != gridMap.end(); ++it) {
-            int proc = it->first;
-            Vector<Box> &boxesAtProc = it->second;
-            realProcBufferSize[proc] = 0L;
-            for(int b(0); b < boxesAtProc.size(); ++b) {
-                realProcBufferSize[proc] += boxesAtProc[b].numPts();
-            }
-        }
-
-
-
-        unsigned long long maxBuf = *max_element(realProcBufferSize.begin(), realProcBufferSize.end());
-        if(ParallelDescriptor::IOProcessor())
-            std::cout << "maxBuf: " << maxBuf << std::endl;
-        H5Pset_chunk(dcpl_id, 1, &maxBuf);
-
-        //dcdc fill
         unsigned long long totalOffset(0);
         for(auto it = gridMap.begin(); it != gridMap.end(); ++it) {
             int proc = it->first;
+            Vector<Box> &boxesAtProc = it->second;
             procOffsets[proc] = totalOffset;
             procBufferSize[proc] = 0L;
-            procBufferSize[proc] += maxBuf;
+            for(int b(0); b < boxesAtProc.size(); ++b) {
+                /* procBufferSize[proc] += boxesAtProc[b].numPts() * ncomp; */
+                procBufferSize[proc] += boxesAtProc[b].numPts();
+            }
             totalOffset += procBufferSize[proc];
         }
 
-         // //dcdc-output procOffsets
-        if(ParallelDescriptor::IOProcessor()) {
-            std::cout << "procOffsets: ";
-            for (auto i = procOffsets.begin(); i != procOffsets.end(); ++i)
-                std::cout << *i << " ";
-            std::cout << std::endl;
-        }
+        unsigned long long maxBuf = *max_element(procBufferSize.begin(), procBufferSize.end());
+        if(ParallelDescriptor::IOProcessor())
+            std::cout << "maxBuf: " << maxBuf << std::endl;
+        maxBuf = 32768;
+        H5Pset_chunk(dcpl_id, 1, &maxBuf);
 
         if(ParallelDescriptor::IOProcessor()) {
             int vbCount(0);
@@ -1503,246 +1320,34 @@ void WriteMultiLevelPlotfileHDF5MultiDset (const std::string& plotfilename,
 
         ch_offset[0]       = procOffsets[myProc];          // ---- offset on this proc
         hs_procsize[0]     = procBufferSize[myProc];       // ---- size of buffer on this proc
-        std::cout << "nComp()" << ncomp << std::endl;
-        std::cout << "size of buffer on proc " << myProc << ": " << realProcBufferSize[myProc] << std::endl;
-        hs_allprocsize[0]     = maxBuf * nProcs ; ;  // ---- size of buffer on all procs
+        std::cout << "size of buffer on proc " << myProc << ": " << hs_procsize[0] << std::endl;
+        hs_allprocsize[0]  = offsets[sortedGrids.size()];  // ---- size of buffer on all procs
 
         hid_t dataspace    = H5Screate_simple(1, hs_allprocsize, NULL);
         hid_t memdataspace = H5Screate_simple(1, hs_procsize, NULL);
 
-        if (realProcBufferSize[myProc] == 0)
+        if (hs_procsize[0] == 0)
             H5Sselect_none(dataspace);
         else
             H5Sselect_hyperslab(dataspace, H5S_SELECT_SET, ch_offset, NULL, hs_procsize, NULL);
 
-        Vector<Real> b_buffer(procBufferSize[myProc], -1.0);
-        // const MultiFab* data;
-        // std::unique_ptr<MultiFab> mf_tmp;
-        // if (mf[level]->nGrowVect() != 0) {
-        //     mf_tmp = std::make_unique<MultiFab>(mf[level]->boxArray(),
-        //                                         mf[level]->DistributionMap(),
-        //                                         mf[level]->nComp(), 0, MFInfo(),
-        //                                         mf[level]->Factory());
-        //     MultiFab::Copy(*mf_tmp, *mf[level], 0, 0, mf[level]->nComp(), 0);
-        //     data = mf_tmp.get();
-        // } else {
-        //     data = mf[level];
-        // }
+        Vector<Real> a_buffer(procBufferSize[myProc]*ncomp, -1.0);
+        Vector<Real> a_buffer_ind(procBufferSize[myProc], -1.0);
+        const MultiFab* data;
+        std::unique_ptr<MultiFab> mf_tmp;
+        if (mf[level]->nGrowVect() != 0) {
+            mf_tmp = std::make_unique<MultiFab>(mf[level]->boxArray(),
+                                                mf[level]->DistributionMap(),
+                                                mf[level]->nComp(), 0, MFInfo(),
+                                                mf[level]->Factory());
+            MultiFab::Copy(*mf_tmp, *mf[level], 0, 0, mf[level]->nComp(), 0);
+            data = mf_tmp.get();
+        } else {
+            data = mf[level];
+        }
 
         hid_t dataset;
         char dataname[64];
-
-        BL_PROFILE_VAR("H5DwriteData", h5dwg);
-        //dcdc-start
-        MultiFab *tempmf = const_cast<MultiFab*>(mf[level]);
-        Real bogus_flag=-1e200;
-        if (level < finest_level)
-        {
-            MultiFab *highMf = const_cast<MultiFab*>(mf[level+1]);
-            const BoxArray baf = BoxArray((*highMf).boxArray()).coarsen(ref_ratio[level]);
-            for (MFIter mfi(*tempmf); mfi.isValid(); ++mfi)
-            {
-                FArrayBox& myFab = (*tempmf)[mfi];
-                    std::vector< std::pair<int,Box> > isects = baf.intersections((*tempmf).boxArray()[mfi.index()]);
-
-
-                for (int ii = 0; ii < isects.size(); ii++){
-                    myFab.setVal(bogus_flag,isects[ii].second,0,ncomp);
-                }
-            }
-        }
-
-        int bSize = BSIZE;
-
-        size_t bigX=0;
-        // /*stack*/
-        // size_t unitBlkSize = bSize*bSize*bSize;
-        // bigX = cbrt(realProcBufferSize[myProc]/(unitBlkSize))/1.5;
-        // size_t testBigZ = ((realProcBufferSize[myProc]/(bSize*bSize*bSize)) + (bigX*bigX) - 1) / (bigX*bigX);
-        // std::cout<< "testBigZ: " << testBigZ << std::endl;
-        // if (testBigZ*bigX*bigX*unitBlkSize>procBufferSize[myProc]){
-        //     std::cout << "protential bug, set bigX to 1 " << testBigZ*bigX*bigX << std::endl;
-        //     bigX = 1;
-        // }
-        // std::cout<< "bigX: " << bigX << std::endl;
-        // size_t b2Size = bSize*bSize;
-        // size_t big2X = bigX*bigX;
-
-        for (int jj = 0; jj < ncomp; jj++) {
-
-            long long cnt = 0;
-            for (MFIter mfi(*tempmf); mfi.isValid(); ++mfi)
-            {
-                Array4<Real> const& fab_array = (*tempmf).array(mfi);
-                int ncomp = (*tempmf).nComp();
-                const Box& box = mfi.validbox();
-
-                const Dim3 lo = amrex::lbound(box);
-                const Dim3 hi = amrex::ubound(box);
-
-                //check mod
-                if (jj == 0 && level == finest_level) {
-                    std::cout << lo.x << " " << lo.y << " " << lo.z << std::endl;
-                    if (lo.x%bSize!=0 || lo.y%bSize!=0 || lo.z%bSize!=0) {
-                        std::cout << "wtwtwtwtwtwtwtwtwtwtwt" << std::endl;
-                    }
-                }
-
-
-                /*stack*/
-                // size_t cc=0;
-                // size_t xx, yy, zz, bb, ii, jjj, kk;
-                // for (int z = 0; z < (hi.z-lo.z+1)/bSize; ++z){
-                //     for (int y = 0; y < (hi.y-lo.y+1)/bSize; ++y){
-                //         for (int x = 0; x < (hi.x-lo.x+1)/bSize; ++x){
-                //             // todo bb = 0
-                //             for (int k = lo.z+z*bSize; k < lo.z+z*bSize+bSize; ++k){
-                //                 for (int j =lo.y+y*bSize; j <lo.y+y*bSize+bSize; ++j){
-                //                     for (int i = lo.x+x*bSize; i <lo.x+x*bSize+bSize; ++i){
-                //                         if(fab_array(i,j,k,0) != bogus_flag) {
-                //                             cc = cnt/(unitBlkSize);
-                //                             zz = cc/big2X;
-                //                             yy = (cc - zz*big2X)/bigX;
-                //                             xx = cc -zz*big2X - yy*bigX;
-
-                //                             bb = cnt - unitBlkSize*cc;
-
-                //                             kk = bb/b2Size;
-                //                             jjj = (bb - kk*b2Size)/bSize;
-                //                             ii = bb - kk*b2Size - jjj*bSize;
-                //                             // if (b_buffer[(xx*bSize+ii) + (yy*bSize+jjj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] != 0)
-                //                             //     std::cout << b_buffer[(xx*bSize+ii) + (yy*bSize+jjj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] <<std::endl;
-                //                             b_buffer[(xx*bSize+ii) + (yy*bSize+jjj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] = fab_array(i,j,k,jj);
-
-                //                             cnt++;
-                //                         }
-                //                     }
-                //                 }
-                //             }
-                //         }
-                //     }
-                // }
-
-                /*nast*/
-                for (int z = 0; z < (hi.z-lo.z+1)/bSize; ++z)
-                    for (int y = 0; y < (hi.y-lo.y+1)/bSize; ++y)
-                        for (int x = 0; x < (hi.x-lo.x+1)/bSize; ++x)
-                            for (int k = lo.z+z*bSize; k < lo.z+z*bSize+bSize; ++k)
-                                for (int j =lo.y+y*bSize; j <lo.y+y*bSize+bSize; ++j)
-                                    for (int i = lo.x+x*bSize; i <lo.x+x*bSize+bSize; ++i){
-                                        if(fab_array(i,j,k,0) != bogus_flag) {
-                                            b_buffer[cnt] = fab_array(i,j,k,jj);
-                                            cnt++;
-                                        }
-                                        // /*bs*/
-                                        // else {
-                                        //     b_buffer[cnt] = 0;
-                                        //     cnt++;
-                                        // }
-                                    }
-
-
-                /*1d*/
-                // for (int z = lo.z; z <= hi.z; ++z)
-                //     for (int y = lo.y; y <= hi.y; ++y)
-                //         for (int x = lo.x; x <= hi.x; ++x) {
-                //             if(fab_array(x,y,z,0) != bogus_flag) {
-                //                 b_buffer[cnt] = fab_array(x,y,z,jj);
-                //                 cnt++;
-                //             }
-                //             /*bs*/
-                //             else {
-                //                 cnt++;
-                //             }
-                //         }
-
-            }
-            if (jj == 0) {
-                /*stack*/
-                // size_t bigZ = ((cnt/(bSize*bSize*bSize)) + (bigX*bigX) - 1) / (bigX*bigX);
-                // std::cout << "bigZ: " << bigZ << std::endl;
-
-                // cnt = bigZ*bigX*bigX*bSize*bSize*bSize;
-                // std::cout << "fill cnt in proc: " << myProc << " : "<< cnt << std::endl;
-                // sprintf(meta_name, "meta/s_%d_%d.txt", level, myProc);
-                // std::ofstream sfile(meta_name);
-                // if (!sfile.is_open()) {
-                //     std::cout << "Error opening metadata file\n";
-                //     return;
-                // }
-                // sfile << bigX;
-                // sfile.close();
-
-                char meta_name[64];
-                 std::cout<< "cnt in buffer " << myProc << " : " << cnt << std::endl;
-
-                if(ParallelDescriptor::IOProcessor()) {
-                    sprintf(meta_name, "meta/sp_%d.txt", level);
-                    std::ofstream spfile(meta_name);
-                    if (!spfile.is_open()) {
-                        std::cout << "Error opening metadata file\n";
-                        return;
-                    }
-                    for (auto i = sortedProcs.begin(); i != sortedProcs.end(); ++i)
-                        spfile << *i << " ";
-                    spfile.close();
-                }
-
-                realProcBufferSize[myProc] = cnt;
-
-                if (level == finest_level) {
-                    if(ParallelDescriptor::IOProcessor()) {
-                        char meta_name[64];
-                        sprintf(meta_name, "meta/meta_%d.txt", level);
-                        std::ofstream outfile(meta_name);
-                        if (!outfile.is_open()) {
-                            std::cout << "Error opening metadata file\n";
-                            return;
-                        }
-                        for(int i(0); i < nProcs; i++)
-                            outfile <<  realProcBufferSize[i] << std::endl;
-                        outfile.close();
-
-                        sprintf(meta_name, "meta/f.txt", level);
-                        std::ofstream ffile(meta_name);
-                        if (!ffile.is_open()) {
-                            std::cout << "Error opening metadata file\n";
-                            return;
-                        }
-                        ffile << level;
-                        ffile.close();
-
-                        sprintf(meta_name, "meta/p.txt", level);
-                        std::ofstream pfile(meta_name);
-                        if (!pfile.is_open()) {
-                            std::cout << "Error opening metadata file\n";
-                            return;
-                        }
-                        pfile << nProcs;
-                        pfile.close();
-
-                    }
-                } else {
-                    char meta_name[128];
-                    sprintf(meta_name, "meta/meta_%d_%d.txt", level, myProc);
-                    std::ofstream outfile(meta_name);
-                    if (!outfile.is_open()) {
-                        std::cout << "Error opening metadata file\n";
-                        return;
-                    }
-                    outfile <<  realProcBufferSize[myProc];
-                    outfile.close();
-                }
-            }
-
-        double eb = 0.001;
-        std::ifstream inputFile("eb.txt");
-        if (inputFile.is_open()) {
-            inputFile >> eb;
-            inputFile.close();
-        } else {
-            std::cerr << "Unable to open the eb file." << std::endl;
-        }
 
         dcpl_id_lev = H5Pcopy(dcpl_id);
 #ifdef AMREX_USE_HDF5_SZ
@@ -1750,7 +1355,8 @@ void WriteMultiLevelPlotfileHDF5MultiDset (const std::string& plotfilename,
             size_t cd_nelmts;
             unsigned int* cd_values = NULL;
             unsigned filter_config;
-            SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 1, 0, eb, level, realProcBufferSize[myProc]);
+            // SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 0, 10, 0, 0, 0);
+            SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 1, 0, 0.001, 0, hs_procsize[0]);
             H5Pset_filter(dcpl_id_lev, H5Z_FILTER_SZ, H5Z_FLAG_MANDATORY, cd_nelmts, cd_values);
         }
 #endif
@@ -1760,22 +1366,47 @@ void WriteMultiLevelPlotfileHDF5MultiDset (const std::string& plotfilename,
             size_t cd_nelmts;
             unsigned int* cd_values = NULL;
             unsigned filter_config;
-            SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 1, 0, eb, level, realProcBufferSize[myProc]);
+            SZ_errConfigToCdArray(&cd_nelmts, &cd_values, 1, 0, 0.001, 0, hs_procsize[0]);
             H5Pset_filter(dcpl_id_lev, H5Z_FILTER_SZ3, H5Z_FLAG_MANDATORY, cd_nelmts, cd_values);
         }
 #endif
+
+        BL_PROFILE_VAR("H5DwriteData", h5dwg);
+
+        for (int jj = 0; jj < ncomp; jj++) {
+
+            Long writeDataItems(0), writeDataSize(0);
+            for(MFIter mfi(*data); mfi.isValid(); ++mfi) {
+                const FArrayBox &fab = (*data)[mfi];
+                writeDataItems = fab.box().numPts();
+                if(doConvert) {
+                    RealDescriptor::convertFromNativeFormat(static_cast<void *> (a_buffer.dataPtr()),
+                                                            writeDataItems * ncomp, fab.dataPtr(), *whichRD);
+
+                } else {    // ---- copy from the fab
+                    memcpy(static_cast<void *> (a_buffer.dataPtr()),
+                           fab.dataPtr(), writeDataItems * ncomp * whichRDBytes);
+                }
+
+                // Extract individual variable data
+                memcpy(static_cast<void *> (a_buffer_ind.dataPtr() + writeDataSize),
+                       static_cast<void *> (a_buffer.dataPtr() + jj*writeDataItems),
+                       writeDataItems * whichRDBytes);
+
+                writeDataSize += writeDataItems;
+            }
 
             sprintf(dataname, "data:datatype=%d", jj);
 #ifdef AMREX_USE_HDF5_ASYNC
             dataset = H5Dcreate_async(grp, dataname, H5T_NATIVE_DOUBLE, dataspace, H5P_DEFAULT, dcpl_id_lev, H5P_DEFAULT, es_id_g);
             if(dataset < 0) std::cout << ParallelDescriptor::MyProc() << "create data failed!  ret = " << dataset << std::endl;
-            ret = H5Dwrite_async(dataset, H5T_NATIVE_DOUBLE, memdataspace, dataspace, dxpl_col, b_buffer.dataPtr(), es_id_g);
+            ret = H5Dwrite_async(dataset, H5T_NATIVE_DOUBLE, memdataspace, dataspace, dxpl_col, a_buffer_ind.dataPtr(), es_id_g);
             if(ret < 0) { std::cout << ParallelDescriptor::MyProc() << "Write data failed!  ret = " << ret << std::endl; break; }
             H5Dclose_async(dataset, es_id_g);
 #else
             dataset = H5Dcreate(grp, dataname, H5T_NATIVE_DOUBLE, dataspace, H5P_DEFAULT, dcpl_id_lev, H5P_DEFAULT);
             if(dataset < 0) std::cout << ParallelDescriptor::MyProc() << "create data failed!  ret = " << dataset << std::endl;
-            ret = H5Dwrite(dataset, H5T_NATIVE_DOUBLE, memdataspace, dataspace, dxpl_col, b_buffer.dataPtr());
+            ret = H5Dwrite(dataset, H5T_NATIVE_DOUBLE, memdataspace, dataspace, dxpl_col, a_buffer_ind.dataPtr());
             if(ret < 0) { std::cout << ParallelDescriptor::MyProc() << "Write data failed!  ret = " << ret << std::endl; break; }
             H5Dclose(dataset);
 #endif

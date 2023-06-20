@@ -8,7 +8,7 @@
 #include <AMReX_BLProfiler.H>
 #include <AMReX_Print.H>
 #include <AMReX_VisMF.H>
-
+#include <AMReX_PlotFileUtil.H>
 #ifdef AMREX_USE_EB
 #include <AMReX_EBFabFactory.H>
 #include <AMReX_EBMultiFabUtil.H>
@@ -30,6 +30,9 @@ EBSupport AmrLevel::m_eb_support_level = EBSupport::volume;
 
 DescriptorList AmrLevel::desc_lst;
 DeriveList     AmrLevel::derive_lst;
+
+Vector<MultiFab> multiMf(5);
+Vector<Geometry> multGeom(5);
 
 void
 AmrLevel::post_timestep (int /*iteration*/)
@@ -319,48 +322,85 @@ AmrLevel::writePlotFile (const std::string& dir,
     // multifab -- plotMF.
     int       cnt   = 0;
     const int nGrow = 0;
-    MultiFab  plotMF(grids,dmap,n_data_items,nGrow,MFInfo(),Factory());
+    multiMf[level].define(grids,dmap,n_data_items,nGrow,MFInfo(),Factory());
     MultiFab* this_dat = nullptr;
     //
     // Cull data from state variables -- use no ghost cells.
     //
+    Vector<std::string> varnames;
     for (i = 0; i < static_cast<int>(plot_var_map.size()); i++)
     {
         int typ  = plot_var_map[i].first;
         int comp = plot_var_map[i].second;
         this_dat = &state[typ].newData();
-        MultiFab::Copy(plotMF,*this_dat,comp,cnt,1,nGrow);
+       // MultiFab::Copy(plotMF,*this_dat,comp,cnt,1,nGrow);
+        MultiFab::Copy(multiMf[level],*this_dat,comp,cnt,1,nGrow);
+        varnames.push_back(desc_lst[typ].name(comp));
         cnt++;
     }
 
+    multGeom[level] = Geom();
+
     // derived
-    if (!derive_names.empty())
+    if (derive_names.size() > 0)
     {
         for (auto const& dname : derive_names)
         {
-            derive(dname, cur_time, plotMF, cnt);
+            derive(dname, cur_time, multiMf[level], cnt);
+            //derive(dname, cur_time, plotMF, cnt);
             cnt += derive_lst.get(dname)->numDerive();
+	    varnames.push_back(dname);
         }
     }
 
-#ifdef AMREX_USE_EB
+    std::string dir_final = dir;
+    if(!amrex::AsyncOut::UseAsyncOut())
+    {
+        auto start_position_to_erase = dir_final.find(".temp");
+        dir_final.erase(start_position_to_erase,5);
+    }
+    std::string mt_final = dir_final + "_multi";
+    std::string compression = "SZ@0.1";
+
+    //if (level == parent->finestLevel() && parent->finestLevel() > 0)
+    if (level == parent->finestLevel())
+    {
+        auto dPlotFileTime0 = amrex::second();
+        WriteMultiLevelPlotfileHDF5SingleDset(
+    //   WriteMultiLevelPlotfileHDF5SingleDset(
+                                  mt_final,
+                                  parent->finestLevel()+1,
+                                  amrex::GetVecOfConstPtrs(multiMf),
+                                  varnames,
+                                  multGeom,
+                                  cur_time,
+                                  Vector<int>(parent->finestLevel()+1, 0),
+                                  Vector<IntVect>(2, IntVect{AMREX_D_DECL(2,2,2)}),
+                                  compression);
+        auto  dPlotFileTime = amrex::second() - dPlotFileTime0;
+        const int IOProc        = ParallelDescriptor::IOProcessorNumber();
+        ParallelDescriptor::ReduceRealMax(dPlotFileTime,IOProc);
+        amrex::Print() << "Write h5plotfile time = " << dPlotFileTime << "  seconds" << "\n\n";
+    }
+
+/*#ifdef AMREX_USE_EB
     if (EB2::TopIndexSpaceIfPresent()) {
         plotMF.setVal(0.0, cnt, 1, nGrow);
         auto *factory = static_cast<EBFArrayBoxFactory*>(m_factory.get());
         MultiFab::Copy(plotMF,factory->getVolFrac(),0,cnt,1,nGrow);
     }
-#endif
+#endif*/
 
     //
     // Use the Full pathname when naming the MultiFab.
     //
-    std::string TheFullPath = FullPath;
+    /*std::string TheFullPath = FullPath;
     TheFullPath += BaseName;
     if (AsyncOut::UseAsyncOut()) {
         VisMF::AsyncWrite(plotMF,TheFullPath);
     } else {
         VisMF::Write(plotMF,TheFullPath,how,true);
-    }
+    }*/
 
     levelDirectoryCreated = false;  // ---- now that the plotfile is finished
 }

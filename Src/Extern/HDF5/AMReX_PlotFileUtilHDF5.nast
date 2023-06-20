@@ -7,7 +7,7 @@
 #ifdef AMREX_USE_EB
 #include <AMReX_EBFabFactory.H>
 #endif
-#include <cmath>
+
 #include "hdf5.h"
 
 #ifdef AMREX_USE_HDF5_ZFP
@@ -781,7 +781,7 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
 
         ch_offset[0]       = procOffsets[myProc];          // ---- offset on this proc
         hs_procsize[0]     = procBufferSize[myProc];       // ---- size of buffer on this proc
-        std::cout << " " << std::endl;
+        //std::cout << " " << std::endl;
         //std::cout << "size of old buffer on proc " << myProc << ": " << procBufferSize[myProc] << std::endl;
         //std::cout << "size of buffer on proc " << myProc << ": " << realProcBufferSize[myProc] << std::endl;
         // hs_allprocsize[0]  = offsets[sortedGrids.size()];  // ---- size of buffer on all procs
@@ -832,8 +832,8 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
         } else {
             std::cerr << "Unable to open the bbb file." << std::endl;
         }
-        int bSize =  bbb*std::pow(2,(double)level);
-
+        if (ParallelDescriptor::MyProc() == 0) std::cout << "bbb: " << bbb <<std::endl;
+        int bSize = int(bbb*std::pow(2,static_cast<double>(level)));
         //std::cout << "bSize: " << bSize << std::endl;
 
         Vector<Real> b_buffer(procBufferSize[myProc], 0);
@@ -842,22 +842,22 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
         size_t bigX=1;
 
         // /*stack*/
-         size_t unitBlkSize = bSize*bSize*bSize;
-         if (realProcBufferSize[myProc]>0){
-         bigX = cbrt(realProcBufferSize[myProc]/(unitBlkSize));
-         //std::cout<< "init bigX: " << bigX << std::endl;
-             size_t testBigZ = ((realProcBufferSize[myProc]/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
-             //std::cout<< "testBigZ: " << testBigZ << std::endl;
+        // size_t unitBlkSize = bSize*bSize*bSize;
+        // if (realProcBufferSize[myProc]>0){
+        // bigX = cbrt(realProcBufferSize[myProc]/(unitBlkSize));
+        // std::cout<< "init bigX: " << bigX << std::endl;
+        //     size_t testBigZ = ((realProcBufferSize[myProc]/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
+        //     std::cout<< "testBigZ: " << testBigZ << std::endl;
 
-             while (testBigZ*bigX*bigX*unitBlkSize>(procBufferSize[myProc]/ncomp)){
-                 bigX -= 1;
-                 //std::cout << "protential bug, decreasing bigX to: " << bigX << std::endl;
-                 testBigZ = ((realProcBufferSize[myProc]/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
-             }
-         }
-         std::cout<< "final bigX: " << bigX << std::endl;
-         size_t b2Size = bSize*bSize;
-         size_t big2X = bigX*bigX;
+        //     while (testBigZ*bigX*bigX*unitBlkSize>(procBufferSize[myProc]/ncomp)){
+        //         bigX -= 1;
+        //         std::cout << "protential bug, decreasing bigX to: " << bigX << std::endl;
+        //         testBigZ = ((realProcBufferSize[myProc]/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
+        //     }
+        // }
+        // std::cout<< "final bigX: " << bigX << std::endl;
+        // size_t b2Size = bSize*bSize;
+        // size_t big2X = bigX*bigX;
 
 
         for (int pp = 0; pp < ncomp; pp++) {
@@ -879,41 +879,41 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
                 }
 
                 /*stack*/
-                 size_t cc=0;
-                 size_t xx, yy, zz, bb, ii, jj, kk;
-                 for (int z = 0; z < (hi.z-lo.z+1)/bSize; ++z){
-                     for (int y = 0; y < (hi.y-lo.y+1)/bSize; ++y){
-                         for (int x = 0; x < (hi.x-lo.x+1)/bSize; ++x){
-                             // todo bb = 0
-                             for (int k = lo.z+z*bSize; k < lo.z+z*bSize+bSize; ++k){
-                                 for (int j =lo.y+y*bSize; j <lo.y+y*bSize+bSize; ++j){
-                                     for (int i = lo.x+x*bSize; i <lo.x+x*bSize+bSize; ++i){
-                                         if(fab_array(i,j,k,0) != bogus_flag) {
-                                             cc = tempCnt/(unitBlkSize);
-                                             zz = cc/big2X;
-                                             yy = (cc - zz*big2X)/bigX;
-                                             xx = cc -zz*big2X - yy*bigX;
+                // size_t cc=0;
+                // size_t xx, yy, zz, bb, ii, jj, kk;
+                // for (int z = 0; z < (hi.z-lo.z+1)/bSize; ++z){
+                //     for (int y = 0; y < (hi.y-lo.y+1)/bSize; ++y){
+                //         for (int x = 0; x < (hi.x-lo.x+1)/bSize; ++x){
+                //             // todo bb = 0
+                //             for (int k = lo.z+z*bSize; k < lo.z+z*bSize+bSize; ++k){
+                //                 for (int j =lo.y+y*bSize; j <lo.y+y*bSize+bSize; ++j){
+                //                     for (int i = lo.x+x*bSize; i <lo.x+x*bSize+bSize; ++i){
+                //                         if(fab_array(i,j,k,0) != bogus_flag) {
+                //                             cc = tempCnt/(unitBlkSize);
+                //                             zz = cc/big2X;
+                //                             yy = (cc - zz*big2X)/bigX;
+                //                             xx = cc -zz*big2X - yy*bigX;
 
-                                             bb = tempCnt - unitBlkSize*cc;
+                //                             bb = tempCnt - unitBlkSize*cc;
 
-                                             kk = bb/b2Size;
-                                             jj = (bb - kk*b2Size)/bSize;
-                                             ii = bb - kk*b2Size - jj*bSize;
-                                             // if (b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] != 0)
-                                             //     std::cout << b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] <<std::endl;
-                                             b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size+ pp*maxBuf] = fab_array(i,j,k,0);
+                //                             kk = bb/b2Size;
+                //                             jj = (bb - kk*b2Size)/bSize;
+                //                             ii = bb - kk*b2Size - jj*bSize;
+                //                             // if (b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] != 0)
+                //                             //     std::cout << b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size] <<std::endl;
+                //                             b_buffer[(xx*bSize+ii) + (yy*bSize+jj)*bSize*bigX + (zz*bSize+kk)*big2X*b2Size+ pp*maxBuf] = fab_array(i,j,k,0);
 
-                                             tempCnt++;
-                                         }
-                                     }
-                                 }
-                             }
-                         }
-                     }
-                 }
+                //                             tempCnt++;
+                //                         }
+                //                     }
+                //                 }
+                //             }
+                //         }
+                //     }
+                // }
 
                 // /*nast*/
-                    /*for (int z = 0; z < (hi.z-lo.z+1)/bSize; ++z)
+                    for (int z = 0; z < (hi.z-lo.z+1)/bSize; ++z)
                         for (int y = 0; y < (hi.y-lo.y+1)/bSize; ++y)
                             for (int x = 0; x < (hi.x-lo.x+1)/bSize; ++x)
                                 for (int k = lo.z+z*bSize; k < lo.z+z*bSize+bSize; ++k)
@@ -923,12 +923,12 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
                                                 b_buffer[tempCnt + pp*maxBuf] = fab_array(i,j,k,pp);
                                                 tempCnt++;
                                             }
-                                            // // bs
+                                            // /*bs*/
                                             // else {
                                             //     b_buffer[cnt] = 0;
                                             //     cnt++;
                                             // }
-                                        } */
+                                        }
 
                 /*1d*/
                 // for (int z = lo.z; z <= hi.z; ++z)
@@ -949,9 +949,6 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
             // std::cout << "tempCnt: " << tempCnt << std::endl;
             tempCnt=0;
         }
-        if(ParallelDescriptor::IOProcessor()) {
-            std::cout << "amrex using stack" << std::endl;
-        }
         auto  preFileTime = amrex::second() - preFileTime0;
         const int IOProc2        = ParallelDescriptor::IOProcessorNumber();
         ParallelDescriptor::ReduceRealMax(preFileTime,IOProc2);
@@ -970,18 +967,18 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
         //std::cout<< "cnt in buffer " << myProc << " : " << cnt << std::endl;
 
         /*stack*/
-         size_t bigZ = ((cnt/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
-         //std::cout << "bigZ: " << bigZ << std::endl;
-         cnt = bigZ*bigX*bigX*unitBlkSize;
-         //std::cout << "fill cnt in proc: " << myProc << " : "<< cnt << std::endl;
-         sprintf(meta_name, "meta/s_%d_%d.txt", level, myProc);
-         std::ofstream sfile(meta_name);
-         if (!sfile.is_open()) {
-             std::cout << "Error opening metadata file\n";
-             return;
-         }
-         sfile << bigX;
-         sfile.close();
+        // size_t bigZ = ((cnt/unitBlkSize) + (bigX*bigX) - 1) / (bigX*bigX);
+        // std::cout << "bigZ: " << bigZ << std::endl;
+        // cnt = bigZ*bigX*bigX*unitBlkSize;
+        // std::cout << "fill cnt in proc: " << myProc << " : "<< cnt << std::endl;
+        // sprintf(meta_name, "meta/s_%d_%d.txt", level, myProc);
+        // std::ofstream sfile(meta_name);
+        // if (!sfile.is_open()) {
+        //     std::cout << "Error opening metadata file\n";
+        //     return;
+        // }
+        // sfile << bigX;
+        // sfile.close();
         /*stack*/
 
         if(ParallelDescriptor::IOProcessor()) {
@@ -1009,16 +1006,20 @@ void WriteMultiLevelPlotfileHDF5SingleDset (const std::string& plotfilename,
         realProcBufferSize[myProc] = cnt;
 
         if (level == finest_level) {
-            char meta_name[128];
-            sprintf(meta_name, "meta/meta_%d_%d.txt", level, myProc);
-            std::ofstream outfile(meta_name);
-            if (!outfile.is_open()) {
-                std::cout << "Error opening metadata file\n";
-                return;
-            }
-            outfile <<  realProcBufferSize[myProc];
-            outfile.close();
             if(ParallelDescriptor::IOProcessor()) {
+                char meta_name[64];
+                sprintf(meta_name, "meta/meta_%d.txt", level);
+                std::ofstream outfile(meta_name);
+                if (!outfile.is_open()) {
+                    std::cout << "Error opening metadata file\n";
+                    return;
+                }
+                for(int i(0); i < nProcs; i++){
+                    if (realProcBufferSize[i]>0) {
+                        outfile <<  realProcBufferSize[i] << std::endl;
+                    }
+                }
+                outfile.close();
 
                 sprintf(meta_name, "meta/f.txt", level);
                 std::ofstream ffile(meta_name);
@@ -1552,7 +1553,7 @@ void WriteMultiLevelPlotfileHDF5MultiDset (const std::string& plotfilename,
             }
         }
 
-        int bSize = BSIZE;
+        int bSize = BSIZE*std::pow(2,level);
 
         size_t bigX=0;
         // /*stack*/
@@ -1898,4 +1899,3 @@ WriteMultiLevelPlotfileHDF5 (const std::string &plotfilename,
 }
 
 } // namespace amrex
-
